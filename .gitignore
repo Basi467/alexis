@@ -1,0 +1,36 @@
+# Secrets
+.env
+.spotify_cache
+gmail_credentials.json
+.gmail_token.json
+
+# Personal data
+memory/memories.json
+memory/memories.json.migrated
+memory/memory.db
+memory/memory_index_cache.pkl
+scratch_debug.txt
+systems/document_index_cache.pkl
+scheduler/tasks.json
+scheduler/alarm_log.txt
+scheduler/email_check_state.json
+scheduler/calendar_check_state.json
+
+# Large model binaries (fetch separately, don't version)
+models/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local tooling state
+.claude/
