@@ -55,7 +55,12 @@ BASE_SYSTEM_PROMPT_TEXT = (
     "background, or anything else about them — call recall_memory first to actually check. "
     "This also applies before doing something that could be personalized to a known "
     "preference (like playing music), not just when directly asked about it. Don't assume "
-    "you don't know something just because it isn't in the current conversation."
+    "you don't know something just because it isn't in the current conversation.\n\n"
+    "If a request has multiple parts (e.g. 'check my calendar and find my resume'), your "
+    "final reply must cover every part you were asked about, even if answering them took "
+    "several tool calls across multiple steps. Don't let the most recently gathered "
+    "information crowd out something you already found earlier in the same request — "
+    "briefly summarize everything together in one final answer."
 )
 
 
@@ -257,12 +262,20 @@ def _recall_project(args: dict[str, Any]) -> tuple[str, bool]:
     return f"You don't have that project tracked yet. Let the user know honestly. {VOICE_CONSTRAINT}", False
 
 
+MAX_CHARS_PER_DOCUMENT_CHUNK = 800
+
+
 def _search_documents(args: dict[str, Any]) -> tuple[str, bool]:
-    results = search_documents(args["query"])
+    results = search_documents(args["query"], max_results=3)
     if not results:
         return f"No relevant documents were found. Let the user know honestly. {VOICE_CONSTRAINT}", False
     set_last_found_file(results[0]["source_path"])
-    context = "\n\n".join(f"From {r['source_file']}: {r['text']}" for r in results)
+    # Capped at 3 results x 800 chars, not the full ~500-word chunk x 6 results this
+    # used to send -- confirmed live: the uncapped version blew past Groq's 8000
+    # tokens-per-minute limit combined with the rest of the request and failed the
+    # whole turn with a 413. Also just more appropriate for a voice reply, which
+    # shouldn't be reading a full chunk back verbatim anyway.
+    context = "\n\n".join(f"From {r['source_file']}: {r['text'][:MAX_CHARS_PER_DOCUMENT_CHUNK]}" for r in results)
     return (
         f"Answer using this information from the user's documents:\n\n{context}\n\n"
         f"Briefly mention which file the information came from. {VOICE_CONSTRAINT}"

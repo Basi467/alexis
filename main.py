@@ -83,6 +83,7 @@ def handle_conversation() -> None:
         result = route(user_text, history, pending_confirmation)
         pending_confirmation = result.get("pending_confirmation")
 
+        logger.info("You: %s | Alexis: %s", user_text, result["text"])
         overlay.add_transcript("Alexis", result["text"])
         overlay.set_state("speaking")
         interrupted = speak(result["text"], allow_interrupt=ALLOW_BARGE_IN)

@@ -2,6 +2,8 @@ import logging
 import os
 from pathlib import Path
 
+from config import BASE_DIR
+
 logger = logging.getLogger(__name__)
 
 SEARCH_FOLDERS = [
@@ -9,6 +11,14 @@ SEARCH_FOLDERS = [
     Path.home() / "Downloads",
     Path.home() / "Documents",
 ]
+
+# Alexis's own project directory lives at Desktop/alexisv2 -- without this, walking
+# the Desktop folder recurses straight into Alexis's own source code, logs, and
+# scratch files. Confirmed live: this let find_file_by_name match and actually
+# open scratch_debug.txt (a debug scratch file with real personal email content)
+# when asked to find a resume, and let search_documents index the app's own
+# alarm_log.txt as if it were a user document.
+_PROJECT_ROOT = str(BASE_DIR.resolve())
 
 EXCLUDED_FOLDER_NAMES = {
     "site-packages", "venv", "env", ".venv", "node_modules",
@@ -35,8 +45,20 @@ def _collect_files() -> list[dict]:
         for root, dirs, filenames in os.walk(folder):
             dirs[:] = [d for d in dirs if d not in EXCLUDED_FOLDER_NAMES]
 
+            resolved_root = str(Path(root).resolve())
+            if resolved_root == _PROJECT_ROOT or resolved_root.startswith(_PROJECT_ROOT + os.sep):
+                dirs[:] = []  # don't descend into it either
+                continue
+
             for name in filenames:
                 if name.lower() in EXCLUDED_FILENAMES:
+                    continue
+                # Microsoft Office's temp lock file for a currently-open document --
+                # always this "~$" + original-name pattern, so an exact-name set
+                # can't catch it. Confirmed live: these got picked up as "new"
+                # files and fed to doc_store's re-indexer, which then failed trying
+                # to parse them as real .docx packages (they're just lock markers).
+                if name.startswith("~$"):
                     continue
 
                 full_path = Path(root) / name
