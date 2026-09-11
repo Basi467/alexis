@@ -32,7 +32,7 @@ from systems.ui_automation import find_control_center
 from scheduler.alarm import set_daily_alarm
 from scheduler.reminders import set_reminder, list_reminders, cancel_reminder
 from scheduler.email_monitor import enable_email_monitoring, disable_email_monitoring
-from systems.email_intelligence import check_for_important_emails, describe_important_emails
+from systems.email_intelligence import describe_recent_emails
 from memory.job_tracker import list_applications, get_application, upsert_application
 from memory.episodic import (
     search_conversation_history, describe_conversation_history, SEARCH_CONVERSATION_HISTORY_TOOL,
@@ -515,13 +515,19 @@ def _check_email(args: dict[str, Any]) -> tuple[str, bool]:
     if not is_gmail_configured():
         return "Gmail isn't set up yet. Let the user know they need to complete the one-time setup first.", False
 
-    important = check_for_important_emails()
-    if not important:
-        return "No important emails right now. Let the user know honestly.", False
+    # Deliberately NOT check_for_important_emails() here -- that runs every email
+    # through the importance classifier, which exists so the unattended 30-min
+    # background poller only interrupts the user for something worth interrupting
+    # over. When the user directly asks "check my mail" they want to hear what's
+    # actually in the inbox right now, not have it pre-filtered the same way.
+    from systems.gmail_client import fetch_recent_emails
+    emails = fetch_recent_emails(max_results=10, unread_only=False)
+    if not emails:
+        return "No recent emails right now. Let the user know honestly.", False
 
-    summary = describe_important_emails(important)
+    summary = describe_recent_emails(emails)
     return (
-        f"Important emails found: {summary}. If the user wants to see them, offer to "
+        f"Recent emails: {summary}. If the user wants to see them, offer to "
         f"open Gmail using the open_gmail tool -- not open_app, they have no Gmail "
         f"desktop app installed. {VOICE_CONSTRAINT}"
     ), False

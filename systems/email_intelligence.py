@@ -94,6 +94,18 @@ def describe_important_emails(important_emails: list[dict]) -> str:
     return "; ".join(parts)
 
 
+def describe_recent_emails(emails: list[dict]) -> str:
+    """Same voice-friendly format as describe_important_emails, but for a plain,
+    unfiltered list -- used when the user directly asks 'check my mail', which
+    should read out what's actually in the inbox, not run it through the
+    importance classifier the background poller uses to decide what's worth an
+    unprompted interruption."""
+    if not emails:
+        return ""
+    parts = [f"an email from {e['sender'].split('<')[0].strip()} about \"{e['subject']}\"" for e in emails]
+    return "; ".join(parts)
+
+
 def extract_application_update(email: dict) -> dict | None:
     """Pulls structured company/role/status out of an email already classified
     as important, for the job application tracker (memory/job_tracker.py).
