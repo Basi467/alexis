@@ -19,6 +19,9 @@ scheduler/calendar_check_state.json
 # Large model binaries (fetch separately, don't version)
 models/
 
+# Portfolio/demo assets -- not source code, don't belong in the repo
+*.mp4
+
 # Python
 __pycache__/
 *.pyc
