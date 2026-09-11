@@ -5,7 +5,7 @@ multi-step tool-calling agent (no LangChain/framework) that reasons across
 calendar, files, email, and real GUI automation in a single request, with a
 resumable confirm-before-acting safety flow.**
 
-🎥 [Watch the demo](#) · 📄 [Known gotchas & design notes](#known-gotchas-learned-the-hard-way----read-before-fixing-these-again) · ✅ [66 tests](#tests)
+🎥 [Watch the demo](https://youtu.be/PHZhLCTt0OQ) · 📄 [Known gotchas & design notes](#known-gotchas-learned-the-hard-way----read-before-fixing-these-again) · ✅ [66 tests](#tests)
 
 Under the hood: wake word (Vosk) -> speech-to-text (faster-whisper) -> a
 51-tool agent loop with RAG over local documents, persistent long-term memory,
