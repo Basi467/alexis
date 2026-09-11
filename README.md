@@ -1,7 +1,7 @@
 # Alexis
 
 A personal, always-listening Windows voice assistant. Wake word -> speech-to-text ->
-an LLM agent with ~45 tools -> text-to-speech, plus background tasks (alarm,
+an LLM agent with 51 tools -> text-to-speech, plus background tasks (alarm,
 reminders, email/calendar monitoring, a crash watchdog) that run unattended via
 Windows Task Scheduler.
 
@@ -42,32 +42,43 @@ cached in `.gmail_token.json`. Both features degrade gracefully (just report
 
 ```
 main.py                  wake word -> record -> transcribe -> route -> speak, in a loop
+                         (also holds the single-instance mutex guard and starts ui/overlay)
 audio/                    wake_word.py (Vosk), recorder.py (VAD-gated recording), beep.py, aec.py (echo cancellation for barge-in)
 transcription/            faster-whisper STT
-tts/                       edge-tts + ffmpeg decode + sounddevice playback, with barge-in
-llm/                       router.py (the agent loop + ~45 tool definitions/handlers), groq_client.py, tools.py
+tts/                       edge-tts + ffmpeg decode + sounddevice playback, with barge-in and a
+                           connection warm-up fired at wake-word detection to hide TTS's own
+                           cold-connection latency behind the recording/transcription time
+llm/                       router.py (the agent loop + 51 tool definitions/handlers, plus
+                           _classify_relevant_tools() -- see "Known gotchas"), groq_client.py, tools.py
 memory/                    SQLite + FAISS: facts, projects, behavior rules, job applications, conversation history
 systems/                   one module per capability -- computer_control, gui_control, vision,
                            ui_automation, email_intelligence, calendar_client, web_research, ...
 scheduler/                 alarm/reminders/email monitor/calendar monitor/watchdog -- each is a
-                           Windows Scheduled Task pointing at a small generated .bat file
+                           Windows Scheduled Task whose /tr points directly at pythonw.exe (no
+                           .bat file -- see "Known gotchas" for why)
+ui/                        overlay.py -- a small always-on-top status card (state + live
+                           transcript) that pops up only while engaged, for screen recordings
+                           and visible confirmation during normal use; voice remains the only
+                           actual input, this is display-only
 tests/                     pytest suite for the highest-risk pure logic (see "Tests" below)
 ```
 
-**The agent loop** (`llm/router.py`): each user utterance runs through
-`chat_completion()` with all tools available; the model can chain up to
-`MAX_AGENT_STEPS` (12) tool calls in one turn, reasoning over each result before
-deciding the next step or giving a final spoken answer. Some tools
+**The agent loop** (`llm/router.py`): each user utterance is first passed through
+`_classify_relevant_tools()`, a cheap classification call that narrows the 51-tool
+catalog down to whatever's plausibly relevant (see "Known gotchas" for why this
+exists), then runs through `chat_completion()` with that subset; the model can
+chain up to `MAX_AGENT_STEPS` (12) tool calls in one turn, reasoning over each
+result before deciding the next step or giving a final spoken answer. Some tools
 (`CONFIRMATION_REQUIRED_TOOLS`) pause the loop to ask "do you want me to...?"
 first; confirming *resumes* the same plan rather than restarting it, and GUI
 actions (click/type/submit-key) only need one confirmation per turn, not one
 per click.
 
 **Background tasks** all follow the same pattern: a Python module
-(`scheduler/whatever.py`) writes a small `.bat` file and registers it as a
-Windows Scheduled Task via `schtasks`, with `Hidden`/`WakeToRun` settings applied
-afterward. They're launched with `pythonw.exe` (not `python.exe`) so nothing
-flashes a console window, and each entry script (`scheduler/deliver_*.py`) bootstraps
+(`scheduler/whatever.py`) registers a Windows Scheduled Task via `schtasks`, with
+`/tr` pointing directly at `pythonw.exe "<script>.py>"` (not through a `.bat` file
+or `explorer.exe`) and `Hidden`/`WakeToRun` settings applied afterward, so nothing
+flashes a console window. Each entry script (`scheduler/deliver_*.py`) bootstraps
 `sys.path` itself since Task Scheduler launches it directly by file path.
 
 ## Known gotchas (learned the hard way -- read before "fixing" these again)
@@ -161,21 +172,27 @@ flashes a console window, and each entry script (`scheduler/deliver_*.py`) boots
 python -m pytest tests/
 ```
 
-56 tests, ~30s (dominated by real model loading transitively pulled in through
+66 tests, ~30s (dominated by real model loading transitively pulled in through
 `llm.router` -- this is intentional per-request behavior, not something to
 mock away). Covers the agent loop's confirmation/resumption logic (the most
 complex and most recently bug-fixed part of the app), the tool-relevance
-router's fallback safety, the job tracker's company-matching logic, the
-interview-prep calendar tie-in, email-extraction parsing, episodic
-conversation-history search, and the recorder's VAD gating -- all with mocked
-LLM calls / synthetic signals, no real API usage or hardware access. (Note:
-`test_router_agent_loop.py`'s mocking of this was incomplete until the
-tool-routing fix above -- `ask_groq()`'s two call sites there bypassed the
-`chat_completion` mock and made real API calls, adding ~4s of real network
-round trips per run; now fully mocked via a `_patch_ask_groq` fixture.) Does
-**not** cover anything that needs real audio hardware, a real screen, or real
-API responses -- those are verified through live manual testing each time
-they change, which these tests don't attempt to replace.
+router's fallback safety, the persistent memory system (facts/projects/rules --
+recall_memory/save_memory included, since that's the exact code behind a real
+"Alexis forgot my music preference" bug found in live use), the job tracker's
+company-matching logic, the interview-prep calendar tie-in, email-extraction
+parsing, episodic conversation-history search, and the recorder's VAD gating --
+all with mocked LLM calls / synthetic signals, no real API usage or hardware
+access. (Note: `test_router_agent_loop.py`'s mocking of this was incomplete
+until the tool-routing fix above -- `ask_groq()`'s two call sites there
+bypassed the `chat_completion` mock and made real API calls, adding ~4s of
+real network round trips per run; now fully mocked via a `_patch_ask_groq`
+fixture. `test_memory_store.py` uses the analogous pattern: a targeted fake
+that only ever claims "this updates candidate N" when the test's own marker
+is actually among the candidates offered, so it can never overwrite a real
+fact/rule just because it happened to look similar.) Does **not** cover
+anything that needs real audio hardware, a real screen, or real API
+responses -- those are verified through live manual testing each time they
+change, which these tests don't attempt to replace.
 
 ## Currently enabled background tasks
 
