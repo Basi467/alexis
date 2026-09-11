@@ -102,6 +102,22 @@ flashes a console window, and each entry script (`scheduler/deliver_*.py`) boots
   element picking) run on `CLASSIFICATION_MODEL` (`openai/gpt-oss-20b`, same
   family, much smaller) specifically to reduce how fast this gets hit --
   keep new classification-style call sites on that model, not the main one.
+  Also: the ~51-tool schema catalog itself is ~5500 tokens, sent in full on
+  every single step of a multi-step tool-calling chain -- confirmed to be the
+  direct cause of hitting the daily limit after any request needing several
+  tool calls (a 5-step chain alone could burn 20,000+ tokens on repeated
+  schema). Fixed with `_classify_relevant_tools()` in `llm/router.py`: a
+  cheap `CLASSIFICATION_MODEL` call picks which `TOOL_CATEGORIES` are
+  plausibly relevant and only those tools (plus `ALWAYS_AVAILABLE_TOOL_NAMES`)
+  get sent, reused for every step of that turn including a confirmation
+  resume. Falls back to the full catalog on any classification failure or
+  unparseable reply -- a wrong guess costs tokens, but a silently-unavailable
+  tool would break the request outright. Confirmed live: the exact request
+  that originally triggered this ("what's on my calendar today and can you
+  find my resume on the desktop") dropped from 51 tools to 12. If you add a
+  new tool, add its name to `TOOL_CATEGORIES` too, or it'll never be sent to
+  the model except via the full-catalog fallback path -- `test_tool_routing.py`
+  has a test that catches this.
 - **Windows 11's Notepad merges multiple launches into tabs of one window** --
   `win32gui.FindWindow('Notepad', None)` can silently grab a pre-existing tab
   instead of a freshly-launched blank one.
@@ -115,7 +131,18 @@ flashes a console window, and each entry script (`scheduler/deliver_*.py`) boots
   multi-window desktop** than on a single focused app -- verified live (invented
   a "zsh" terminal, Blender, Zoom, Discord that weren't real, on a Windows
   machine with none of those open). Trust it less for detailed multi-window
-  questions.
+  questions. Also: `ask_vision()` originally set no `max_tokens`, and this model
+  reliably free-ran to 1200-1700+ output tokens regardless of the question's
+  length or a "be concise" instruction -- on its own enough to exceed Groq's
+  1000 output-tokens-per-minute limit and fail the call outright. Now capped at
+  `max_tokens=500`, and the prompt explicitly tells it not to invent detail it
+  isn't confident about. Confirmed live this materially helps (no more inventing
+  entire nonexistent dialog boxes) but doesn't fully fix it -- reading small/dense
+  text (a system clock, a packed side panel) is still unreliable; a live test
+  read "9/10/2026, 11:44 AM" as "01/10/2024, 12:13 AM". Don't trust vision for
+  anything requiring precision on small text -- same principle as the
+  UI-Automation-over-vision preference below, just for reading instead of
+  clicking.
 - **A Google Cloud OAuth app left in "Testing" publishing status auto-expires
   its refresh tokens after ~7 days** -- a Google policy limit, not a config
   mistake. `systems/google_auth.py`'s `get_credentials()` used to fall back to
@@ -134,16 +161,21 @@ flashes a console window, and each entry script (`scheduler/deliver_*.py`) boots
 python -m pytest tests/
 ```
 
-49 tests, ~30s (dominated by real model loading transitively pulled in through
+56 tests, ~30s (dominated by real model loading transitively pulled in through
 `llm.router` -- this is intentional per-request behavior, not something to
 mock away). Covers the agent loop's confirmation/resumption logic (the most
-complex and most recently bug-fixed part of the app), the job tracker's
-company-matching logic, the interview-prep calendar tie-in, email-extraction
-parsing, episodic conversation-history search, and the recorder's VAD
-gating -- all with mocked LLM calls / synthetic signals, no real API usage or
-hardware access. Does **not** cover anything that needs real audio hardware,
-a real screen, or real API responses -- those are verified through live manual
-testing each time they change, which these tests don't attempt to replace.
+complex and most recently bug-fixed part of the app), the tool-relevance
+router's fallback safety, the job tracker's company-matching logic, the
+interview-prep calendar tie-in, email-extraction parsing, episodic
+conversation-history search, and the recorder's VAD gating -- all with mocked
+LLM calls / synthetic signals, no real API usage or hardware access. (Note:
+`test_router_agent_loop.py`'s mocking of this was incomplete until the
+tool-routing fix above -- `ask_groq()`'s two call sites there bypassed the
+`chat_completion` mock and made real API calls, adding ~4s of real network
+round trips per run; now fully mocked via a `_patch_ask_groq` fixture.) Does
+**not** cover anything that needs real audio hardware, a real screen, or real
+API responses -- those are verified through live manual testing each time
+they change, which these tests don't attempt to replace.
 
 ## Currently enabled background tasks
 

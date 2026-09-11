@@ -50,6 +50,34 @@ def _scripted_chat_completion(script):
 
 
 @pytest.fixture(autouse=True)
+def _patch_ask_groq(monkeypatch):
+    """Mocks ask_groq for both of router.py's classification call sites --
+    _classify_confirmation (yes/no/unrelated) and _classify_relevant_tools
+    (tool-category routing, added to cut per-call token cost on multi-step
+    chains). Neither goes through the chat_completion mock below: ask_groq
+    calls groq_client's own internal chat_completion, not router's
+    monkeypatched name, so without this every route() call here would hit
+    the real Groq API. Confirmed live -- this file took ~37s to run 6 tests
+    before this fixture existed, consistent with several real network round
+    trips, which directly eats into the same daily budget this project keeps
+    running into.
+
+    For the confirmation classifier: infers YES/NO from the reply text
+    embedded in the prompt, matching this file's actual "yes" / "no don't"
+    inputs. For the tool-relevance classifier: always returns "" so it falls
+    back to the full tool list -- correct here since the scripted
+    chat_completion fake below ignores the `tools` argument entirely, so a
+    narrowed list would not be exercising anything meaningful in these tests."""
+    def fake_ask_groq(user_text, conversation_history=None, retries=2, tools=None, model=None):
+        if "CATEGORIES:" in user_text:
+            return "", None
+        if 'they replied: "yes"' in user_text.lower():
+            return "YES", None
+        return "NO", None
+    monkeypatch.setattr(router, "ask_groq", fake_ask_groq)
+
+
+@pytest.fixture(autouse=True)
 def _patch_gui_actions(monkeypatch):
     """Every test in this file stubs the actual mouse/UI-Automation/vision
     calls so nothing touches the real screen -- these tests are about the

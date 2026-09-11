@@ -82,6 +82,89 @@ TOOLS = ALL_TOOLS + [
     MEMORY_TOOL, RECALL_MEMORY_TOOL, UPDATE_PROJECT_TOOL, RECALL_PROJECT_TOOL, SAVE_RULE_TOOL,
     SEARCH_CONVERSATION_HISTORY_TOOL,
 ]
+
+# Sending all ~51 tool schemas on every single step of a multi-step tool-calling
+# turn was confirmed live to cost ~5500 tokens per call just for the schema alone
+# (before messages/completion) -- a 5-step chain alone could burn 20,000+ tokens,
+# over 10% of Groq's entire daily budget, and was the direct cause of repeatedly
+# hitting the daily rate limit after any request needing several tool calls.
+# TOOL_CATEGORIES lets _classify_relevant_tools() send only the tools plausibly
+# relevant to a given request instead of the whole catalog every time.
+TOOL_CATEGORIES = {
+    "files_and_documents": ["search_documents", "open_last_file", "find_file_by_name"],
+    "apps": ["open_app", "close_app", "switch_to_app"],
+    "media_and_music": [
+        "play_youtube", "play_spotify", "pause_spotify", "resume_spotify", "skip_spotify",
+        "set_volume", "mute_volume", "unmute_volume",
+    ],
+    "web_search": ["search_web", "search_and_answer", "open_website"],
+    "screen_and_gui_control": ["look_at_screen", "click_on_screen", "type_text", "press_key", "scroll_screen"],
+    "email": ["check_email", "enable_email_monitoring", "disable_email_monitoring", "open_gmail"],
+    "calendar": [
+        "get_calendar_events", "create_calendar_event", "cancel_calendar_event",
+        "enable_calendar_monitoring", "disable_calendar_monitoring",
+    ],
+    "alarms_and_reminders": ["set_daily_alarm", "set_reminder", "list_reminders", "cancel_reminder"],
+    "system_power_and_display": [
+        "set_brightness", "lock_computer", "restart_computer", "shutdown_computer", "cancel_shutdown",
+    ],
+    "job_applications": ["list_job_applications", "update_job_application"],
+    "memory_projects_and_rules": ["update_project", "recall_project", "save_behavior_rule"],
+    "weather": ["get_weather"],
+    "conversation_history": ["search_conversation_history"],
+}
+
+# Sent regardless of classification -- small enough that including them always
+# costs little, and each is broadly relevant across many kinds of requests
+# (e.g. recall_memory needs to be available any time a personal question might
+# come up, not just when the classifier happens to guess "memory").
+ALWAYS_AVAILABLE_TOOL_NAMES = {"end_conversation", "recall_memory", "save_memory", "get_datetime"}
+
+
+def _classify_relevant_tools(user_text: str) -> list[dict]:
+    """Picks which tool categories are plausibly relevant to this request, and
+    returns just those tools (plus the always-available set) instead of the
+    full ~51-tool catalog. Falls back to the FULL list on any failure or
+    unparseable reply -- a wrong category guess costs more tokens, but a tool
+    that's silently unavailable when actually needed would break the request
+    outright, which is the worse failure mode. A request can legitimately need
+    multiple categories at once (e.g. "check my calendar and find my resume"),
+    so the model is explicitly told it can return more than one."""
+    category_list = "\n".join(f"- {name}: {', '.join(tools)}" for name, tools in TOOL_CATEGORIES.items())
+    prompt = (
+        "A user said this to a voice assistant that has tools grouped into categories. "
+        "Which categories could plausibly be needed to handle their request? A request "
+        "can need multiple categories at once. When genuinely unsure, include more "
+        "categories rather than fewer -- missing a needed one is worse than including "
+        "an extra one.\n\n"
+        f"CATEGORIES:\n{category_list}\n\n"
+        f'USER SAID: "{user_text}"\n\n'
+        "Respond with ONLY a comma-separated list of the category names that apply "
+        "(e.g. \"calendar,files_and_documents\"), or NONE if none of them are relevant."
+    )
+    reply, _ = ask_groq(prompt, model=CLASSIFICATION_MODEL)
+    reply = (reply or "").strip()
+
+    if not reply or "trouble reaching my brain" in reply or "usage limit" in reply:
+        return TOOLS
+
+    reply_lower = reply.lower()
+    if reply_lower == "none":
+        matched_categories = []
+    else:
+        matched_categories = [
+            c.strip() for c in reply_lower.replace("\n", ",").split(",") if c.strip() in TOOL_CATEGORIES
+        ]
+        if not matched_categories:
+            # Answered, but nothing parsed into a known category -- treat as a
+            # parse failure, not a confident NONE.
+            return TOOLS
+
+    relevant_names = set(ALWAYS_AVAILABLE_TOOL_NAMES)
+    for category in matched_categories:
+        relevant_names.update(TOOL_CATEGORIES[category])
+
+    return [t for t in TOOLS if t["function"]["name"] in relevant_names]
 VOICE_CONSTRAINT = (
     "Keep your answer short and conversational — 2-4 sentences, since this will be spoken aloud, "
     "not read as text. Do not use markdown, tables, bullet points, headers, or special formatting."
@@ -692,6 +775,7 @@ def _looks_like_a_problem(text: str) -> bool:
 
 def _run_agent_loop(
     messages: list[dict],
+    tools: list[dict] = TOOLS,
     recovering: bool = False,
     gui_confirmed: bool = False,
     start_step: int = 0,
@@ -711,7 +795,7 @@ def _run_agent_loop(
     required tool appearing mid-chain still asks normally regardless.
     """
     for _step in range(start_step, MAX_AGENT_STEPS):
-        message, error = chat_completion(messages, tools=TOOLS)
+        message, error = chat_completion(messages, tools=tools)
         if message is None:
             return {"action": "reply", "text": error, "pending_confirmation": None}
 
@@ -744,6 +828,7 @@ def _run_agent_loop(
                     "recovering": recovering,
                     "gui_confirmed": gui_confirmed,
                     "step": _step,
+                    "tools": tools,
                 },
             }
 
@@ -785,7 +870,8 @@ def _run_agent_loop(
 
 def _route_new_request(user_text: str, history: list[dict]) -> dict[str, Any]:
     messages = [_build_system_prompt()] + history + [{"role": "user", "content": user_text}]
-    return _run_agent_loop(messages)
+    relevant_tools = _classify_relevant_tools(user_text)
+    return _run_agent_loop(messages, tools=relevant_tools)
 
 
 def route(
@@ -836,7 +922,8 @@ def route(
                 return {"action": "reply", "text": result_text, "pending_confirmation": None}
 
             return _run_agent_loop(
-                messages, recovering=recovering, gui_confirmed=gui_confirmed,
+                messages, tools=pending_confirmation.get("tools", TOOLS),
+                recovering=recovering, gui_confirmed=gui_confirmed,
                 start_step=pending_confirmation["step"] + 1,
             )
 
