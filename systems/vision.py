@@ -31,6 +31,16 @@ def _encode_jpeg(image: Image.Image) -> str:
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
+HONESTY_INSTRUCTION = (
+    "Only describe what you can actually and clearly see -- do not invent dialog "
+    "boxes, popups, times, dates, or other specific details you aren't confident "
+    "about. If text is too small to read reliably, say so instead of guessing at "
+    "its content. It's fine to say you're not sure about something. Answer "
+    "concisely, focused on what's actually relevant to the question -- don't "
+    "produce an exhaustive itemized inventory of the whole screen unless asked to. "
+)
+
+
 def describe_screen(question: str) -> str | None:
     """Returns the vision model's answer about the current screen, or None if
     the screen couldn't be captured or the request failed."""
@@ -38,7 +48,7 @@ def describe_screen(question: str) -> str | None:
     if image is None:
         return None
 
-    answer, error = ask_vision(question, _encode_jpeg(image))
+    answer, error = ask_vision(HONESTY_INSTRUCTION + question, _encode_jpeg(image))
     if error is not None:
         logger.warning("Vision request failed: %s", error)
         return None

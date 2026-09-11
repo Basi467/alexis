@@ -128,7 +128,16 @@ def ask_vision(question: str, image_base64: str, retries: int = 2) -> tuple[str,
 
     for attempt in range(retries):
         try:
-            response = client.chat.completions.create(model=VISION_MODEL, messages=messages)
+            # max_tokens matters here beyond just cost: confirmed live, this call
+            # with no cap freely ran to 1200-1700+ output tokens regardless of how
+            # the question was phrased (a "be concise" instruction in the prompt
+            # wasn't reliably obeyed), which alone exceeded Groq's 1000 output-
+            # tokens-per-minute limit for this model and made every other call
+            # fail with a 429. A hard cap fixes the rate limit and, as a side
+            # effect, forces a shorter answer with less room to fabricate detail.
+            response = client.chat.completions.create(
+                model=VISION_MODEL, messages=messages, max_tokens=500,
+            )
             return response.choices[0].message.content or "", None
 
         except groq.RateLimitError as e:
