@@ -1,9 +1,20 @@
 # Alexis
 
-A personal, always-listening Windows voice assistant. Wake word -> speech-to-text ->
-an LLM agent with 51 tools -> text-to-speech, plus background tasks (alarm,
-reminders, email/calendar monitoring, a crash watchdog) that run unattended via
-Windows Task Scheduler.
+**A personal AI voice agent for Windows — not a chatbot wrapper, a hand-built
+multi-step tool-calling agent (no LangChain/framework) that reasons across
+calendar, files, email, and real GUI automation in a single request, with a
+resumable confirm-before-acting safety flow.**
+
+🎥 [Watch the demo](#) · 📄 [Known gotchas & design notes](#known-gotchas-learned-the-hard-way----read-before-fixing-these-again) · ✅ [66 tests](#tests)
+
+Under the hood: wake word (Vosk) -> speech-to-text (faster-whisper) -> a
+51-tool agent loop with RAG over local documents, persistent long-term memory,
+and cost-aware multi-model routing (Groq) -> text-to-speech (edge-tts), plus
+background tasks (alarm, reminders, email/calendar monitoring, a crash
+watchdog) that run unattended via Windows Task Scheduler.
+
+Licensed under [MIT](LICENSE) — clone it, run it yourself, or read through
+the "Known gotchas" section below for the real engineering war stories.
 
 ## Quick start
 
